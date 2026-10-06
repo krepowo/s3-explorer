@@ -2,6 +2,7 @@
   "name": "s3-explorer",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
     "bun": ">=1.1.0"
