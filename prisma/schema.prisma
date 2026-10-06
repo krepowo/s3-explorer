@@ -1,0 +1,143 @@
+// Prisma 7: connection URLs live in `prisma.config.ts`, not here.
+// Models are added per module (identity, audit, connections, uploads).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+  runtime  = "bun"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── identity ────────────────────────────────────────────────────────────────
+
+enum Role {
+  admin
+  uploader
+}
+
+model User {
+  id                   String   @id @default(uuid())
+  email                String   @unique
+  passwordHash         String
+  name                 String
+  role                 Role     @default(uploader)
+  isActive             Boolean  @default(true)
+
+  /// Byte upload limit per user. null = use global default (2 GB).
+  uploadLimitBytes     BigInt?
+
+  /// S3 connection assigned by admin for this uploader.
+  assignedConnectionId String?
+  assignedConnection   S3Connection? @relation(fields: [assignedConnectionId], references: [id], onDelete: Restrict)
+
+  /// Namespace token for public links: 5 lowercase letters for new users,
+  /// 32 hex for accounts created before that change. Not a secret.
+  publicToken          String?  @unique
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  sessions             Session[]
+  files                UploadedFile[]
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    String
+  /// SHA-256 of the raw token (raw token lives only in the cookie).
+  tokenHash String   @unique
+  userAgent String?
+  ip        String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── audit ───────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actorEmail String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+// ─── connections ─────────────────────────────────────────────────────────────
+
+enum S3Provider {
+  r2
+  s3
+  b2
+  minio
+  other
+}
+
+model S3Connection {
+  id             String     @id @default(uuid())
+  label          String
+  provider       S3Provider
+  endpoint       String
+  region         String
+  forcePathStyle Boolean    @default(false)
+  bucket         String
+  /// Public base URL, no trailing slash (e.g. https://cdn.example.com).
+  publicBaseUrl  String
+
+  /// AES-256-GCM, base64(iv | authTag | ciphertext). Never returned to clients.
+  accessKeyIdEnc     String
+  secretAccessKeyEnc String
+
+  /// Preferred connection when a user has no explicit assignment.
+  isPrimary Boolean  @default(false)
+
+  isActive  Boolean  @default(true)
+  createdBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignedUsers User[]
+  files         UploadedFile[]
+
+  @@index([isActive])
+}
+
+// ─── uploads ─────────────────────────────────────────────────────────────────
+
+model UploadedFile {
+  id           String @id @default(uuid())
+  ownerId      String
+  connectionId String
+  /// Object key: "files/<owner-publicToken>/<filename>".
+  key          String
+  /// Display name (original, after auto-rename on collision).
+  filename     String
+  sizeBytes    BigInt
+  contentType  String
+  etag         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner      User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  connection S3Connection @relation(fields: [connectionId], references: [id])
+
+  @@unique([connectionId, key])
+  @@index([ownerId])
+  @@index([createdAt])
+}
